@@ -1,0 +1,515 @@
+version: '3.1'
+# "`-._,-'"`-._,-'"`-._,-'"`-._,-'"`-._,-'"`-._,-'"`-._,-'"`-._,-'"`-._,-'"`-._,-'"`-._,-
+# Portainer - influxdb - chronograf - grafana - node red - mosquitto - kafka - zookeeper
+# ---------------------------------------------------------------------------------------
+# sysctl -w vm.max_map_count=262144 
+# vm.max_map_count in /etc/sysctl.conf toevoegen :
+#  vm.max_map_count=262144
+# sudo usermod -a -G docker johan
+#                docker           host
+#sudo route add 172.22.0.0/16 192.168.99.100
+# ---------------------------------------------------------------------------------------
+# ****** voeg volgende regels toe aan etc/hosts ***************
+
+#   127.0.0.1       localhost
+#   192.168.43.78 kafka-1 kafka-2 kafka-3 
+#       ....  waarbij je uiteraard met ifconfig 192.168.43.78 vervangt door ipadres host
+#  ***controle :
+#  nslookup kafka-1
+#  ping -c 4 kafka1
+
+# ****containeromgeving opspinnen met : ***********
+# sudo docker-compose up -d --build
+services:
+
+#   ************ influxdb ***********
+  influxdb:
+    restart: always
+    hostname: influxdb
+#  domainname: affy.com
+#   restart: on-failure      
+    image: influxdb:latest
+    container_name: influxdb
+    ports:
+      - "8086:8086"
+      - "2003:2003"
+      - "8083:8083"
+    environment:
+      - INFLUXDB_GRAPHITE_ENABLED=true
+      - INFLUXDB_ADMIN_ENABLED=true
+    volumes:
+      - influxdb_data:/var/lib/influxdb
+    networks:
+      iot:
+        aliases:
+          - influxdb
+
+# Define a service for using the influx CLI tool.
+# docker-compose run influxdb-cli
+#  influxdb-cli:
+#    image: influxdb:latest
+#    entrypoint:
+#      - influx
+#      - -host
+#      - influxdb
+#    links:
+#      - influxdb
+
+# ********* chronograf ********* 
+  chronograf:
+    image: chronograf:latest
+    hostname: chronograf    
+    container_name: chronograf
+    volumes:
+      - chronograf-data:/var/lib/chronograf
+      - ./chronograf:/var/lib/chronograf
+    ports:
+      - "10000:10000"
+    links:
+      - influxdb
+    restart: always
+    networks:
+      iot:
+        aliases:
+          - chronograf
+#   ************ grafana ***********
+  grafana:
+    container_name: grafana
+    hostname: grafana    
+    image: grafana/grafana
+    restart: always        
+    ports:
+      - "3000:3000"
+#   env_file:
+#     - 'env.grafana'
+    volumes:
+      - grafana-data:/var/lib/grafana
+#      - ./grafana/etc:/etc/grafana
+#      - ./grafana/lib:/var/lib/grafana
+#      - GF_SECURITY_ADMIN_PASSWORD=$PASSWORD
+#   user: "472"
+    networks:
+      iot:
+        aliases:
+          - grafana
+
+#   ************ elasticsearch ***********
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:6.5.4
+    container_name: elasticsearch
+    restart: on-failure  
+    hostname: elasticsearch
+    ports:
+      - "9200:9200"
+#      - "9300:9300"
+    environment:
+      - cluster.name=docker-cluster
+      - node.name=elasticnode1
+      - "network.host=0.0.0.0"
+      - xpack.security.enabled=false
+      - xpack.monitoring.enabled=true
+      - xpack.watcher.enabled=false
+      - xpack.graph.enabled=false      
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+#      discovery.type: "single-node"
+#      xpack.security.enabled: "false"
+#      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - elasticsearch-data1:/usr/share/elasticsearch/data
+#      - ./elasticsearch1/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+    networks:
+      iot:
+        aliases:
+          - elasticsearch
+
+  elasticsearch2:
+    image: docker.elastic.co/elasticsearch/elasticsearch:6.5.4
+    container_name: elasticsearch2
+    restart: on-failure  
+    hostname: elasticsearch
+#    ports:
+#      - "9200:9200"
+#      - "9300:9300"
+    environment:
+      - cluster.name=docker-cluster
+      - bootstrap.memory_lock=true
+      - node.name=elasticnode2
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "discovery.zen.ping.unicast.hosts=elasticsearch"
+#      discovery.type: "single-node"
+#      xpack.security.enabled: "false"
+#      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - elasticsearch-data2:/usr/share/elasticsearch/data
+#      - ./elasticsearch2/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+    networks:
+      iot:
+        aliases:
+          - elasticsearch2
+#   ************ kibana ***********
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:6.5.4
+#    build: kibana
+    container_name: kibana
+    hostname: kibana
+    restart: on-failure  
+    depends_on:
+      - elasticsearch
+      - elasticsearch2
+    ports:
+      - "5601:5601"
+    environment:
+      - server.name=kibana
+      - "server.host=0.0.0.0"
+      - "elasticsearch.url=http://elasticsearch:9200"
+      - xpack.security.enabled=false
+      - xpack.monitoring.enabled=false
+      - xpack.graph.enabled=false
+      - xpack.reporting.enabled=false      
+#      elasticsearch.username: johan
+#      elasticsearch.password: changeme
+#      ELASTICSEARCH_URL: "http://elasticsearch:9200"
+      - elasticsearch.requestTimeout=500000
+#      xpack.security.enabled: "false"
+#      discovery.type: "single-node"
+#      XPACK_MONITORING_ENABLED: "true"
+
+#   volumes:
+#      - ./kibana/config/kibana.yml:/usr/share/kibana/config/kibana.yml    
+    networks:
+      iot:
+        aliases:
+          - kibana
+#  ********* cluster van 3 : zookeeper & kafka  **********************   
+  zookeeper-1:
+    image: confluentinc/cp-zookeeper:latest
+    hostname: zookeeper-1
+    container_name: zookeeper-1
+    restart: on-failure
+    ports:
+      - "12181:12181"
+    environment:
+      ZOOKEEPER_SERVER_ID: 1
+      ZOOKEEPER_CLIENT_PORT: 12181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_INIT_LIMIT: 5
+      ZOOKEEPER_SYNC_LIMIT: 2
+      ZOOKEEPER_SERVERS: zookeeper-1:12888:13888;zookeeper-2:22888:23888;zookeeper-3:32888:33888
+    networks:
+      iot:
+        aliases:
+          - zookeeper-1
+ 
+  zookeeper-2:
+    image: confluentinc/cp-zookeeper:latest
+    hostname: zookeeper-2
+    container_name: zookeeper-2    
+    restart: on-failure
+    ports:
+      - "22181:22181"
+    environment:
+      ZOOKEEPER_SERVER_ID: 2
+      ZOOKEEPER_CLIENT_PORT: 22181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_INIT_LIMIT: 5
+      ZOOKEEPER_SYNC_LIMIT: 2
+      ZOOKEEPER_SERVERS: zookeeper-1:12888:13888;zookeeper-2:22888:23888;zookeeper-3:32888:33888
+    networks:
+      iot:
+        aliases:
+          - zookeeper-2
+ 
+  zookeeper-3:
+    image: confluentinc/cp-zookeeper:latest
+    hostname: zookeeper-3
+    container_name: zookeeper-3    
+    restart: on-failure
+    ports:
+      - "32181:32181"
+    environment:
+      ZOOKEEPER_SERVER_ID: 3
+      ZOOKEEPER_CLIENT_PORT: 32181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_INIT_LIMIT: 5
+      ZOOKEEPER_SYNC_LIMIT: 2
+      ZOOKEEPER_SERVERS: zookeeper-1:12888:13888;zookeeper-2:22888:23888;zookeeper-3:32888:33888
+    networks:
+      iot:
+        aliases:
+          - zookeeper-3
+
+  kafka-1:
+    image: confluentinc/cp-kafka:latest
+    hostname: kafka-1
+    container_name: kafka-1
+    restart: on-failure
+    ports:
+      - "19092:19092"
+    volumes:
+      - ./kafka-1/logs:/tmp/kafka-logs
+      - ./kafka-1/data:/var/lib/kafka/data
+    depends_on:
+      - zookeeper-1
+      - zookeeper-2
+      - zookeeper-3
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ADVERTISED_HOST_NAME: kafka-1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper-1:12181,zookeeper-2:12181,zookeeper-3:12181
+#      KAFKA_HEAP_OPTS: "-Xmx64M -Xms64M"
+
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:19092
+#     ***** ofwel : *****
+#      KAFKA_ADVERTISED_LISTENERS: LISTENER_DOCKER_INTERNAL://kafka-1:19092,LISTENER_DOCKER_EXTERNAL://${DOCKER_HOST_IP:-127.0.0.1}:19092
+#      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: LISTENER_DOCKER_INTERNAL:PLAINTEXT,LISTENER_DOCKER_EXTERNAL:PLAINTEXT
+#      KAFKA_INTER_BROKER_LISTENER_NAME: LISTENER_DOCKER_INTERNAL
+#  ***** testtopic 1 heeft 3 partities en 2 replicaties : *****
+#      KAFKA_CREATE_TOPICS: "testtopic1:3:2"
+#      TOPICS: testtopic1
+
+    networks:
+      iot:
+        aliases:
+          - kafka-1
+
+  kafka-2:
+    image: confluentinc/cp-kafka:latest   
+    hostname: kafka-2
+    container_name: kafka-2    
+    restart: on-failure
+    ports:
+      - "29092:29092"
+    volumes:
+      - ./kafka-2/logs:/tmp/kafka-logs
+      - ./kafka-2/data:/var/lib/kafka/data
+    depends_on:
+      - zookeeper-1
+      - zookeeper-2
+      - zookeeper-3
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ADVERTISED_HOST_NAME: kafka-2
+ #     KAFKA_HEAP_OPTS: "-Xmx64M -Xms64M"
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper-1:12181,zookeeper-2:12181,zookeeper-3:12181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:29092
+#      KAFKA_ADVERTISED_LISTENERS: LISTENER_DOCKER_INTERNAL://kafka-2:29092,LISTENER_DOCKER_EXTERNAL://${DOCKER_HOST_IP:-127.0.0.1}:29092
+#      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: LISTENER_DOCKER_INTERNAL:PLAINTEXT,LISTENER_DOCKER_EXTERNAL:PLAINTEXT
+#      KAFKA_INTER_BROKER_LISTENER_NAME: LISTENER_DOCKER_INTERNAL
+
+    networks:
+      iot:
+        aliases:
+          - kafka-2
+
+  kafka-3:
+    image: confluentinc/cp-kafka:latest
+    hostname: kafka-3
+    restart: on-failure
+    container_name: kafka-3
+    ports:
+      - "39092:39092"
+    volumes:
+      - ./kafka-3/logs:/tmp/kafka-logs
+      - ./kafka-3/data:/var/lib/kafka/data
+    depends_on:
+      - zookeeper-1
+      - zookeeper-2
+      - zookeeper-3
+    environment:
+      KAFKA_BROKER_ID: 3
+      KAFKA_ADVERTISED_HOST_NAME: kafka-3
+#      KAFKA_HEAP_OPTS: "-Xmx64M -Xms64M"
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper-1:12181,zookeeper-2:12181,zookeeper-3:12181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:39092
+#      KAFKA_ADVERTISED_LISTENERS: LISTENER_DOCKER_INTERNAL://kafka-3:39092,LISTENER_DOCKER_EXTERNAL://${DOCKER_HOST_IP:-127.0.0.1}:39092
+#      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: LISTENER_DOCKER_INTERNAL:PLAINTEXT,LISTENER_DOCKER_EXTERNAL:PLAINTEXT
+ #     KAFKA_INTER_BROKER_LISTENER_NAME: LISTENER_DOCKER_INTERNAL
+
+#      KAFKA_CREATE_TOPICS: "testtopic1:3:2,testtopic2:3:2:compact"
+    networks:
+      iot:
+        aliases:
+          - kafka-3
+
+# ******** kafka manager *********
+  kafka-manager:
+    image: dockerkafka/kafka-manager:latest
+    container_name: kafka-manager
+    hostname: kafka-manager
+    restart: always
+    environment:
+      ZK_HOSTS: zookeeper-1:12181,zookeeper-2:22181,zookeeper-3:32181
+      APPLICATION_SECRET: letmein
+      KM_ARGS: -Djava.net.preferIPv4Stack=true
+    ports:
+      - "9999:9000"
+    links:
+      - zookeeper-1:zookeeper-1
+      - zookeeper-2:zookeeper-2
+      - zookeeper-3:zookeeper-3
+    volumes:
+      - ./kafka-manager/conf:/opt/kafka-manager-1.2.7/conf
+    networks:
+      iot:
+        aliases:
+          - kafka-manager
+
+# ***************** mosquitto MQTT broker *********************
+  mosquitto:
+    image: eclipse-mosquitto
+    hostname: mosquitto   
+    container_name: mosquitto
+    ports:
+      - "1883:1883"
+
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:rw
+#      - ./mosquitto/etc:/etc/mosquitto:ro
+#      - ./mosquitto/etc/mosquitto.d/auth-plugin.conf:/etc/mosquitto.d/auth-plugin.conf
+#      - ./mosquitto/log:/var/log/mosquitto:rw 
+#      - ./mosquitto/lib/:/var/lib/mosquitto:rw
+     
+    restart: on-failure
+    networks:
+      iot:
+        aliases:
+          - mosquitto
+# *************** node-red ****************
+  node-red:
+    build: ./node-red
+    restart: always
+    hostname: node-red
+    container_name: mynodered
+    user: "1000"
+    ports:
+      - "1880:1880"
+    links:
+      - mosquitto:broker
+      - zookeeper-1
+      - zookeeper-2
+      - zookeeper-3
+    depends_on:
+      - mosquitto
+    volumes:
+       - ./node-red/data:/data
+       - ./node-red/runtime:/root/.node-red
+    networks:
+      iot:
+        aliases:
+          - node-red
+
+#  ********* apache-nifi *****************
+  apache-nifi:
+    image: apache/nifi:latest
+    hostname: nifi
+    container_name: nifi
+    restart: always
+    ports:
+      - 32768:8080
+    depends_on:
+      - zookeeper-1
+      - zookeeper-2
+      - zookeeper-3
+      - kafka-1
+      - kafka-2
+      - kafka-3
+    environment:
+      - NIFI_WEB_HTTP_PORT=8080
+      - NIFI_CLUSTER_IS_NODE=true
+      - NIFI_CLUSTER_NODE_PROTOCOL_PORT=8082
+      - NIFI_ZK_CONNECT_STRING=zookeeper-1:12181,zookeeper-2:22181,zookeeper-3:32181
+      - NIFI_ELECTION_MAX_WAIT=1 min
+      - nifi.flowcontroller.autoResumeState=true
+#   volumes:
+#     - ./apache-nifi/nifi-current:/opt/nifi/nifi-current
+#     - ./apache-nifi/nifi-current:/opt/nifi/nifi-current/run
+#     - ./apache-nifi/nifi-current/logs:/opt/nifi/nifi-current/logs
+#     - ./apache-nifi/nifi-toolkit-current:/opt/nifi/nifi-toolkit-current
+    volumes:
+      - ./apache-nifi/data/:/conf/
+      
+    networks:
+      iot:
+        aliases:
+          - nifi
+# ************ optioneel ******************
+#  ************ portainer ***********
+#  portainer:
+#    container_name: Portainer  
+#    image: portainer/portainer
+#   command: --admin-password $PASSWORD -H unix:///var/run/docker.sock
+#    restart: always
+#    ports:
+#      - "9000:9000"
+#    volumes:
+#      - /var/run/docker.sock:/var/run/docker.sock
+#      - portainer_data:/data
+#    network_mode: bridge
+#    networks:
+#      - iot 
+
+#  ********* consul *****************
+#  consul:
+#    image:  gliderlabs/consul-server:latest
+#    command: "-bootstrap -client 0.0.0.0"
+#    container_name: consul
+#    hostname: consul
+#    networks:  
+#    - iot
+#    ports:
+#    - "8500:8500"
+
+# ******** registrator *************
+#  registrator:
+#    image: gliderlabs/registrator:latest
+#    command: "-internal consul://consul:8500"
+#    container_name: registrator
+#    hostname: registrator
+#    networks:
+#    - iot
+#    depends_on:
+#    - consul
+#    volumes:
+#    - /var/run/docker.sock:/tmp/docker.sock
+
+#   ************ aanmaak volume-containers voor opslag ***********
+volumes:
+  influxdb_data:
+    driver: local
+  grafana-data:
+    driver: local
+  chronograf-data: 
+    driver: local
+  elasticsearch-data1:
+    driver: local 
+  elasticsearch-data2:
+    driver: local  
+#  mosquitto_data:
+#   driver: local
+# node-red-data:
+#   driver: local
+# iot-mqtt: 
+#   driver: local
+#  portainer_data:
+#    driver: local
+#   driver: host
+#   driver_opts:
+#     source: /tmp/data
+#     type: none
+#     device: "${PWD}/shared"
+#     o: bind
+#  ************** netwerk **************
+networks:
+  iot:
+    driver: bridge
